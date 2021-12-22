@@ -1,0 +1,741 @@
+---
+title: "Software demo for MACS2 ChIP-Seq peak calling and ChIP peak assignment to neighboring gene locus in Neurospora crassa"
+author: "Tina Kelliher"
+date: "12/22/2021"
+output: html_document
+---
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+## install.packages("stringr")
+## install stringR into your session if you have not previously done so
+
+library(stringr)
+
+library(googledrive)
+
+```
+
+## Acknowledgements
+
+This software demo uses a published and publicly available ChIP-Sequencing dataset. The White Collar Complex (WCC), made up of transcription factors WC-1 and WC-2, is both a blue light sensor and the positive element of the circadian clock in the filamentous fungus *Neurospora crassa*. WC-2 binding sites were measured using ChIP-Seq over a circadian time course in constant darkness.
+
+  Publication: https://pubmed.ncbi.nlm.nih.gov/25362047/
+
+  Data repo: https://www.ncbi.nlm.nih.gov/sra/SRP045821
+
+ChIP-Seq analysis code base was first developed by:
+
+  Matt Ung: former Chao Cheng lab Graduate Student (https://www.linkedin.com/in/mhjung)
+
+  Alec Crowell: former Dunlap / Loros labs Graduate Student (https://github.com/aleccrowell)
+
+## Pre-Analysis I: ChIP-Seq Read Mapping
+
+ChIP-Seq samples were processed at Dartmouth, sequenced at Oregon State
+
+The Freitag lab mapped ChIP-Seq reads to the *Neurospora* NC10 genome version (https://biochem.oregonstate.edu/content/michael-freitag)
+
+This collaborative project was funded by NIGMS grant # P01GM068087; PIs Dunlap, Bell-Pedersen, Sachs, Freitag, and others (https://grantome.com/grant/NIH/P01-GM068087-10)
+
+## Pre-Analysis II: MACS2 ChIP Peak Calling Algorithm
+
+MACS2 was downloaded from the Bioconda library using Anaconda’s Python distribution (version 2.1.1.20160309)
+
+MACS2 was run on the 9x ChIP-Seq samples in batch using the following command line script:
+  run_MACS()
+  > for FILE in ls
+  > do
+  > macs2 callpeak -t $FILE -c ./V5_control_sorted.bam -f BAM -g 4.014e7 –call-summits –nomodel –extsize 200 -q 0.01 –slocal 500 –llocal 5000 -n
+  > done
+
+Output files, *_sort_peaks.xls, are available for download as described below
+
+## Setup: download ChIP-Seq peak assignment files locally
+
+To run this R script locally, you will need access to the MACS2 ChIP-Seq peak output files as well as the *Neurospora crassa* genome annotation file
+
+Files can be found in my Dartmouth Google Drive, publicly shared sub-directory: "WCC_ChIP-Seq_demo/input_files"
+
+Raw data files for 9x ChIP-Seq experiments are also available on Google Drive: https://drive.google.com/drive/folders/1-Jj9lWowfWvspfTzxdx2N14FArtkQE63?usp=sharing
+
+To download the files needed for this script, you can either:
+
+1) run the following chunk of R code, OR
+
+2) download manually from: "https://drive.google.com/drive/folders/1gn8fYUh5SngDjLIobbr_Njp-8vl_N5J5?usp=sharing". Create a folder called "input_data" in the same directory as this markdown file "WCC_ChIP_peak_analysis.Rmd" on your file system. Move the 9x ChIP peak files and 1x downloaded genome annotation file into this folder called "input_data"
+
+```{r}
+
+## install.packages("googledrive")
+## install GoogleDrive into your session if you have not previously done so
+
+data_url <- "1gn8fYUh5SngDjLIobbr_Njp-8vl_N5J5"
+
+folder <- drive_get(as_id(data_url))
+## if running googledrive synatax for the first time, you will need to grant the Tidyverse API Packages access to your Google Account
+## if you select "no access", this step will generate: Permission Error 403
+## to check directory contents, use: drive_ls(data_url)
+
+drive_download(as_id("1m_ONE2bB2KnHJsOKj97HqBjc4kOue0_V"), path="./input_data/FungiDB-45_NcrassaOR74A_rmSpaces.gff")
+
+drive_download(as_id("11YJkUh94vjADgMSULwDDbeZAmC6uSZwi"), path="./input_data/1373_1396_sort_peaks.xls")
+
+drive_download(as_id("10BANRknRzu2SiO-svcDXMSxmwPmvqx5k"), path="./input_data/1374_1397_sort_peaks.xls")
+
+drive_download(as_id("16PQQeE1TCpRDldu7Ow04fTEwJREPNvH7"), path="./input_data/1375_1398_sort_peaks.xls")
+
+drive_download(as_id("1IETBhigzqsyO_HHhIZebSIZCwQpwf429"), path="./input_data/1376_1399_sort_peaks.xls")
+
+drive_download(as_id("196NUzDprI5uolAZVkifxJ-lk-XVbY2S6"), path="./input_data/1377_1400_sort_peaks.xls")
+
+drive_download(as_id("1DhMHr7VIj26bq3bNPW42sLD_6N5zi6Dc"), path="./input_data/1378_1401_sort_peaks.xls")
+
+drive_download(as_id("1LaftfLI1WK5atgZJx6Kg0ifjhysilBYQ"), path="./input_data/1379_1402_sort_peaks.xls")
+
+drive_download(as_id("1vMCL9lparCpr8lpaFmxju3h_HrjD-9eC"), path="./input_data/1380_1403_sort_peaks.xls")
+
+drive_download(as_id("1E-Fev9PkuU4uqfNHWDv0YFKVyVJRPZbC"), path="./input_data/1381_1404_sort_peaks.xls")
+
+```
+
+## Part I: reformat the Neurospora crassa OR74A gene annotation file
+
+Goal of Part I: find all transcription start sites (TSSs) for Neurospora genes to use for annotating ChIP peaks
+
+Problem solved by Part I: 
+  - we are now using version NC12 with updated gene annotations
+  - ChIP-Seq reads were mapped to version NC10
+  - rectify the coordinate differences between gene / TSS annotations and ChIP-Seq peaks called by the MACS2 algorithm
+
+Very Important Note: NC12 has a structural error compared to NC10 (PMID: 27260477) with an improper inversion on a contig within Chromosome 6. This NC12 inversion was manually validated by CMK in an analysis that also showed that all other genome coordinates between NC10 and NC12 are identical, aside from the recorded Watson <-> Crick swap for Chromosome 7 coordinates.
+
+NC12 gene annotation file downloaded from FungiDB version 45: "FungiDB-45_NcrassaOR74A.gff"
+
+Accessed: 10/25/2019 by CMK (https://fungidb.org/fungidb/app/downloads/release-45/NcrassaOR74A/gff/data/)
+
+File Modifications: Opened file in TextWrangler and replaced space " " characters with underscore "_" to read into R properly --> 38,187 replacements
+
+```{r}
+
+gff <- as.data.frame(read.table("./input_data/FungiDB-45_NcrassaOR74A_rmSpaces.gff"), stringsAsFactors=FALSE)
+
+gff_sub <- gff[which(gff$V3=="gene"),]
+## validated by hand that there are 10,591 total unique NCU genes in this GFF version
+## validated by hand that the "gene" entry is the max() and min() coordinates for a given annotation (i.e. most extreme transcription start and stop sites annotated)
+gff_sub_2 <- cbind(gff_sub[,1], gff_sub[,4:5], gff_sub[,7], gff_sub[,9])
+names(gff_sub_2) <- c("chromosome", "start", "end", "strand", "gene_info")
+labels <- str_extract(gff_sub_2$gene_info, paste("ID=NCU", "[0-9]{5}", sep=""))
+labels_sub <- sub("ID=", "", labels)
+gff_sub_3 <- cbind(labels_sub, gff_sub_2[1:4])
+names(gff_sub_3) <- c("gene", "chromosome", "start", "end", "strand")
+## write.table(gff_sub_3, "./FungiDB-45_NcrassaOR74A_genesOnly.txt", quote=F, row.names=F, sep="\t")
+
+gff_new <- data.frame(gff_sub_3, stringsAsFactors=FALSE)
+## re-label the chromosomes as numbers
+for(i in 1:nrow(gff_new)){
+  curr_chr <- as.character(gff_new[i,2])
+  if(curr_chr=="CM002236"){
+    gff_new[i,2] <- 1
+  } else if(curr_chr=="CM002237"){
+    gff_new[i,2] <- 2
+  } else if(curr_chr=="CM002238"){
+    gff_new[i,2] <- 3
+  } else if(curr_chr=="CM002239"){
+    gff_new[i,2] <- 4
+  } else if(curr_chr=="CM002240"){
+    gff_new[i,2] <- 5
+  } else if(curr_chr=="CM002241"){
+    gff_new[i,2] <- 6
+  } else if(curr_chr=="CM002242"){
+    gff_new[i,2] <- 7
+  } else{
+    next
+  }
+}
+gff_new <- gff_new[order(gff_new$start),]
+gff_new <- gff_new[order(gff_new$chromosome),]
+
+gff_new_sub <- gff_new[which(gff_new$chromosome==6),]
+## fix the incorrect chr VI contig (see text above)
+gff_new_sub2 <- gff_new_sub[which(gff_new_sub$start>=1847127 & gff_new_sub$end<=2788123),]
+watson_coord <- seq(1847127, 2788123, by=1)
+crick_coord <- rev(watson_coord)
+for(i in 1:nrow(gff_new_sub2)){
+  curr_start <- as.numeric(gff_new_sub2[i,3])
+  new_start <- crick_coord[which(watson_coord==curr_start)]
+  curr_end <- as.numeric(gff_new_sub2[i,4])
+  new_end <- crick_coord[which(watson_coord==curr_end)]
+  gff_new_sub2[i,4] <- new_start
+  gff_new_sub2[i,3] <- new_end
+  ## note that the substitute columns are purposefully swapped here to arrange new coordinates 5' to 3'
+  curr_strand <- as.character(gff_new_sub2[i,5])
+  if(curr_strand=="+"){
+    gff_new_sub2[i,5] <- "-"
+  } else{
+    gff_new_sub2[i,5] <- "+"
+  }
+}
+gff_new_sub[which(gff_new_sub$start>=1847127 & gff_new_sub$end<=2788123),] <- gff_new_sub2
+gff_new[which(gff_new$chromosome==6),] <- gff_new_sub
+gff_new <- gff_new[order(gff_new$start),]
+gff_new <- gff_new[order(gff_new$chromosome),]
+
+## last, remove any genes not on the main chromosomes: only rRNA genes & mitochrondria are on the extra contigs
+## original GFF file extra contigs == KC683708, KI440772, KI440765, KI440766, KI440769, KI440773, KI440776, KI440777
+gff_new <- gff_new[which(gff_new$chromosome==1 | gff_new$chromosome==2 | gff_new$chromosome==3 | gff_new$chromosome==4 | gff_new$chromosome==5 | gff_new$chromosome==6 | gff_new$chromosome==7),]
+  
+write.table(gff_new, "./FungiDB-45_NcrassaOR74A_genesOnly_v2.txt", quote=F, row.names=F, sep="\t")
+
+```
+
+## Part II: reformat the 9x WC-2 ChIP-Seq MACS2 output files
+
+Goal of Part II: data cleaning of MACS2 ChIP peak calling algorithm output files
+
+Problem solved by Part II: 
+  - when MACS2 calls multiple sub-peaks for a single ChIP signal, retain only the peak with the most significant p-value score
+
+```{r}
+
+folder <- getwd()
+data_folder <- paste(folder, "/input_data/", sep="")
+numChIPs <- as.numeric(length(list.files(data_folder, pattern = "*.xls")))
+filenames <- list.files(data_folder, pattern = "*.xls")
+
+## concatenate all MACS2 results into 1 data frame
+for(i in 1:numChIPs) {
+  if(i==1){
+    cur_data <- read.table(paste(data_folder, filenames[i], sep=""), sep="\t", header=T, stringsAsFactors=F, comment.char="#")
+    cur_data <- cbind(cur_data$name, cur_data$chr, cur_data$start, cur_data$end, cur_data$length, cur_data$abs_summit, cur_data$pileup, cur_data$X.log10.pvalue., cur_data$fold_enrichment)
+    data_cat <- as.data.frame(cur_data)
+  } else{
+    cur_data <- read.table(paste(data_folder, filenames[i], sep=""), sep="\t", header=T, stringsAsFactors=F, comment.char="#")
+    cur_data <- cbind(cur_data$name, cur_data$chr, cur_data$start, cur_data$end, cur_data$length, cur_data$abs_summit, cur_data$pileup, cur_data$X.log10.pvalue., cur_data$fold_enrichment)
+    data_cat <- rbind(data_cat, cur_data)
+  }
+}
+names(data_cat) <- c("peak_label", "chr", "start_coord", "end_coord", "length_peak", "abs_summit_coord", "pileup_height", "neg_log10_pvalue", "fold_enrichment")
+## write.table(data_cat, "./MACS2_peaks_cat.txt", quote=F, row.names=F, sep="\t")
+
+data_cat <- data.frame(data_cat, stringsAsFactors=FALSE)
+
+## re-label the chromosomes as numbers to match the annotation above
+for(i in 1:nrow(data_cat)){
+  curr_chr <- as.character(data_cat[i,2])
+  curr_chr_split <- as.numeric(sub("supercont10.", "", curr_chr))
+  data_cat[i,2] <- curr_chr_split
+}
+
+## remove any peaks not on the main chromosomes
+data_cat_2 <- data_cat[which(data_cat$chr==1 | data_cat$chr==2 | data_cat$chr==3 | data_cat$chr==4 | data_cat$chr==5 | data_cat$chr==6 | data_cat$chr==7),]
+
+## MACS2 frequently returns individual peaks multiple times if the summit (peak) is broad and computationally difficult to identify
+## deal with this duplicate ChIP peaks here by:
+## retain only one subpeak with the highest p-value score
+peak_names <- data_cat_2[,1]
+peak_names_split <- sub("[a-z]+$", "", peak_names)
+data_cat_2 <- cbind(peak_names_split, data_cat_2[2:9])
+data_cat_2 <- data_cat_2[order(as.numeric(data_cat_2$neg_log10_pvalue), decreasing = TRUE),]
+data_cat_2 <- data_cat_2[order(data_cat_2$peak_names_split),]
+data_cat_2 <- data_cat_2[!duplicated(data_cat_2$peak_names_split),]
+names(data_cat_2) <- c("uniq_peak_label", "chr", "start_coord", "end_coord", "length_peak", "abs_summit_coord", "pileup_height", "neg_log10_pvalue", "fold_enrichment")
+## write.table(data_cat_2, "./MACS2_peaks_cat_v2.txt", quote=F, row.names=F, sep="\t")
+
+data_cat_2 <- data.frame(data_cat_2, stringsAsFactors=FALSE)
+
+## original ChIP-Seq data were aligned to NC10 genome version
+## NC10 has the CORRECT orientation of the inversion on chr 6
+## NC10 has a SWAPPED Watson <-> Crick strand for chr 7
+## to match these data to the annotation above, Watson <-> Crick strand switch done here
+data_cat_sub <- data_cat_2[which(data_cat_2$chr==7),]
+watson_coord <- seq(1, 4255303, by=1)
+crick_coord <- rev(watson_coord)
+for(i in 1:nrow(data_cat_sub)){
+  curr_start <- as.numeric(data_cat_sub[i,3])
+  new_start <- crick_coord[which(watson_coord==curr_start)]
+  curr_end <- as.numeric(data_cat_sub[i,4])
+  new_end <- crick_coord[which(watson_coord==curr_end)]
+  data_cat_sub[i,4] <- new_start
+  data_cat_sub[i,3] <- new_end
+  ## note that the substitute columns are purposefully swapped here to arrange new coordinates 5' to 3'
+  curr_summit <- as.numeric(data_cat_sub[i,6])
+  new_summit <- crick_coord[which(watson_coord==curr_summit)]
+  data_cat_sub[i,6] <- new_summit
+}
+data_cat_2[which(data_cat_2$chr==7),] <- data_cat_sub
+data_cat_2 <- data_cat_2[order(data_cat_2$uniq_peak_label),]
+write.table(data_cat_2, "./MACS2_peaks_cat_v3.txt", quote=F, row.names=F, sep="\t")
+
+```
+
+## Part III: Annotate MACS2 ChIP peaks with neighboring gene TSS
+
+Goal of Part III: annotate WC-2 ChIP-Seq peaks with nearby TSSs
+
+Key parameter for Part III:
+  - what is the distance in base pairs between the edge of a TF's ChIP peak and the nearby TSS that should be considered potentially regulatory? Here we choose 3 kbp. This can be modified with the "threshold" variable directly below:
+
+```{r}
+
+threshold <- 3000
+## edit THIS LINE to change the # of bp away from ChIP peak edges to look for overlapping TSSs
+
+peaks_data <- data.frame(data_cat_2, stringsAsFactors=FALSE)
+
+annot_data <- data.frame(gff_new, stringsAsFactors=FALSE)
+## 10,398 unique annotated genes
+
+chromosomes <- unique(annot_data[,2])
+## the nested FOR loop below will loop over chromosomes (b/c coordinates [1 ... right arm] are re-used) and then over individual peaks to annotate
+
+all_results <- NULL
+
+for(i in 1:length(chromosomes)){
+  cur_chr <- peaks_data[,2] == chromosomes[i]
+  if(sum(cur_chr) == 0) next
+  cur_chr_peaks <- peaks_data[peaks_data[,2] == chromosomes[i], ]
+  ## subset for ChIP peaks by chromosome
+  curr_annot <- annot_data[annot_data[,2] == chromosomes[i], ]
+  ## subset for annotations by chromosome
+  pos_genes <- curr_annot[curr_annot[,5] == "+", c(1, 2, 5, 3)]
+  ## pull start coordinate only as 5' end coordinate of genes on Watson
+  neg_genes <- curr_annot[curr_annot[,5] == "-", c(1, 2, 5, 4)]
+  ## pull end coordinate only as 5' end coordinate of genes on Crick
+  colnames(pos_genes) <- colnames(neg_genes) <- c("name", "chr", "str", "TSS")
+    
+  for(k in 1:nrow(cur_chr_peaks)) {
+    curr_start <- as.numeric(cur_chr_peaks[k, "start_coord"])
+    curr_end <- as.numeric(cur_chr_peaks[k, "end_coord"])
+    curr_width <- as.numeric(cur_chr_peaks[k, "length_peak"])
+    if(curr_width>=threshold){
+    ## this section of code deals with wide ChIP peaks where an entire gene may be contained inside of a peak
+      pos_dis_start <- curr_start - pos_genes[, "TSS"]
+      pos_dis_end <- curr_end - pos_genes[, "TSS"]
+      dis1 <- cbind(pos_dis_start, pos_dis_end)
+      dis1 <- abs(dis1)
+      dis1 <- apply(dis1, 1, min)
+      dis1[pos_genes[, "TSS"] >= curr_start & pos_genes[, "TSS"] <= curr_end] <- 0
+      neg_dis_start <- curr_start - neg_genes[, "TSS"]
+      neg_dis_end <- curr_end - neg_genes[, "TSS"]
+      dis2 <- cbind(neg_dis_start, neg_dis_end)
+      dis2 <- abs(dis2)
+      dis2 <- apply(dis2, 1, min)
+      dis2[neg_genes[, "TSS"] >= curr_start & neg_genes[, "TSS"] <= curr_end] <- 0
+        
+      min1 = which(abs(dis1) <= threshold)
+      min2 = which(abs(dis2) <= threshold)
+        
+      if(length(min1) > 0 | length(min2) > 0) {
+      ## if a gene(s) on the Watson or Crick strand was within the threshold:
+        tmp1 = c(pos_genes[min1, 1], neg_genes[min2, 1])
+        tmp2 = c(dis1[min1], dis2[min2])
+        tmp3 <- data.frame(cbind(tmp1, tmp2))
+        ## this structure will incorporate multiple hits within the threshold
+      } else {
+        tmp1 <- NA
+        tmp2 <- NA
+        tmp3 <- data.frame(tmp1, tmp2)
+        ## this structure will return ChIP peaks with no nearby gene
+      }
+        
+    } else {
+    ## this section of code deals with ChIP peaks less than the threshold width (e.g. 3 kb)
+      pos_dis_start <- curr_start - pos_genes[, "TSS"]
+      pos_dis_end <- curr_end - pos_genes[, "TSS"]
+      dis1 <- cbind(pos_dis_start, pos_dis_end)
+      dis1 <- abs(dis1)
+      dis1 <- apply(dis1, 1, min)
+      neg_dis_start <- curr_start - neg_genes[, "TSS"]
+      neg_dis_end <- curr_end - neg_genes[, "TSS"]
+      dis2 <- cbind(neg_dis_start, neg_dis_end)
+      dis2 <- abs(dis2)
+      dis2 <- apply(dis2, 1, min)
+        
+      min1 = which(abs(dis1) <= threshold)
+      min2 = which(abs(dis2) <= threshold)
+        
+      if(length(min1) > 0 | length(min2) > 0) {
+      ## if a gene(s) on the Watson or Crick strand was within the threshold:
+        tmp1 = c(pos_genes[min1, 1], neg_genes[min2, 1])
+        tmp2 = c(dis1[min1], dis2[min2])
+        tmp3 <- data.frame(cbind(tmp1, tmp2))
+        ## this structure will incorporate multiple hits within the threshold
+      } else {
+        tmp1 <- NA
+        tmp2 <- NA
+        tmp3 <- data.frame(tmp1, tmp2)
+        ## this structure will return ChIP peaks with no nearby gene
+      }
+    }
+    colnames(tmp3) <- c("gene", "distance_from_peak")
+    curLine <- cbind(cur_chr_peaks[k, ], tmp3, row.names=NULL)
+    curLine[, "uniq_peak_label"] <- as.character(curLine[, "uniq_peak_label"])
+    curLine[, "gene"] <- as.character(curLine[, "gene"])
+    all_results <- rbind(all_results, curLine)
+  }
+    
+  print("chromosome done!")
+}
+  
+## write.table(all_results, "./all_results.txt", sep="\t", row.names=F, quote=F)
+
+all_results <- data.frame(all_results, stringsAsFactors=FALSE)
+  
+annot_data_2 <- data.frame(annot_data, row.names=1)
+  
+for(j in 1:nrow(all_results)){
+  if(j == 1){
+    curr_index <- as.numeric(which(all_results[j,10]==row.names(annot_data_2)))
+    annot_to_append <- annot_data_2[curr_index, 2:4]
+    ## this assumes that the very first ChIP peak annotation in the file is NOT "NA" for nearby gene
+  } else{
+    curr_index <- as.numeric(which(all_results[j,10]==row.names(annot_data_2)))
+    if(length(curr_index)==0){
+      annot_to_append <- rbind(annot_to_append, c(NA, NA, NA))
+      ## for when there is no nearby gene to a given ChIP peak
+    } else {
+      annot_to_append <- rbind(annot_to_append, annot_data_2[curr_index, 2:4])
+    }
+  }
+}
+  
+rownames(annot_to_append) <- c()
+  
+all_results <- cbind(all_results, annot_to_append)
+  
+colnames(all_results) <- c("uniq_peak_label", "chr", "start_coord", "end_coord", "length_peak", "abs_summit_coord", "pileup_height", "neg_log10_pvalue", "fold_enrichment", "gene", "distance_from_peak", "gene_start", "gene_end", "gene_strand")
+  
+write.table(all_results, "./all_results_annot.txt", sep="\t", row.names=F, quote=F)
+
+```
+
+## Part IV: Annotate MACS2 ChIP peaks where 0 genes were within the threshold
+
+Goal of Part IV: annotate MACS2 ChIP-Seq peaks marked as "NA" in Part III because 0 genes were within the distance threshold
+
+Problem solved by Part IV: 
+  - when a gene TSS was not within the threshold given in Part III to annotate a given ChIP peak, select the one closest gene to annotate
+
+Based on the method of Sancar and colleagues (PMID: 25822411), we annotate missing peaks by searching for the single closest TSS to the center of that ChIP peak
+
+```{r}
+
+peaks_all <- data.frame(all_results, stringsAsFactors=FALSE)
+peaks_NA <- peaks_all[which(is.na(peaks_all$gene==TRUE)),]
+peaks_NA_sub <- peaks_NA[,1:9]
+peaks_data <- data.frame(peaks_NA_sub, stringsAsFactors=FALSE)
+
+annot_data <- data.frame(gff_new, stringsAsFactors=FALSE)
+## 10,398 unique annotated genes
+
+chromosomes <- unique(annot_data[,2])
+## the nested FOR loop below will loop over chromosomes (b/c coordinates [1 ... right arm] are re-used) and then over individual peaks to annotate
+
+all_results_NA <- NULL
+
+for(i in 1:length(chromosomes)){
+  cur_chr <- peaks_data[,2] == chromosomes[i]
+  if(sum(cur_chr) == 0) next
+  cur_chr_peaks <- peaks_data[peaks_data[,2] == chromosomes[i], ]
+  ## subset for ChIP peaks by chromosome
+  curr_annot <- annot_data[annot_data[,2] == chromosomes[i], ]
+  ## subset for annotations by chromosome
+  pos_genes <- curr_annot[curr_annot[,5] == "+", c(1, 2, 5, 3)]
+  ## pull start coordinate only as 5' end coordinate of genes on Watson
+  neg_genes <- curr_annot[curr_annot[,5] == "-", c(1, 2, 5, 4)]
+  ## pull end coordinate only as 5' end coordinate of genes on Crick
+  colnames(pos_genes) <- colnames(neg_genes) <- c("name", "chr", "str", "TSS")
+    
+  for(k in 1:nrow(cur_chr_peaks)) {
+    cur_center <- as.numeric(cur_chr_peaks[k, "abs_summit_coord"])
+    ## search pos and neg strand genes for single closest gene to center of ChIP peak
+    pos_genes_downstream <- pos_genes[which(pos_genes$TSS > cur_center),]
+    neg_genes_upstream <- neg_genes[which(neg_genes$TSS < cur_center),]
+      
+    pos_dis_center <- cur_center - pos_genes_downstream[, "TSS"]
+    dis1 <- abs(pos_dis_center)
+      
+    neg_dis_center <- cur_center - neg_genes_upstream[, "TSS"]
+    dis2 <- abs(neg_dis_center)
+        
+    min_single_gene <- min(dis1, dis2)
+        
+    if(is.element(min_single_gene,dis1)==TRUE) {
+      ## if the closest single gene distance came from the ChIP peak end coordinate -> downstream genes...
+      index <- which(dis1==min_single_gene)
+      gene_hit <- pos_genes_downstream[index, 1]
+      gene_dis <- as.numeric(min_single_gene)
+      tmp3 <- data.frame(cbind(gene_hit, gene_dis))
+    } else {
+      ## else the closest single gene distance came from the ChIP peak start coordinate -> upstream genes
+      index <- which(dis2==min_single_gene)
+      gene_hit <- neg_genes_upstream[index, 1]
+      gene_dis <- as.numeric(min_single_gene)
+      tmp3 <- data.frame(cbind(gene_hit, gene_dis))
+    }
+
+    colnames(tmp3) <- c("gene", "distance_from_peak")
+    curLine <- cbind(cur_chr_peaks[k, ], tmp3, row.names=NULL)
+    curLine[, "uniq_peak_label"] <- as.character(curLine[, "uniq_peak_label"])
+    curLine[, "gene"] <- as.character(curLine[, "gene"])
+    all_results_NA <- rbind(all_results_NA, curLine)
+  }
+    
+  print("chromosome done!")
+}
+
+## write.table(all_results_NA, "./all_results_NAs.txt", sep="\t", row.names=F, quote=F)
+
+all_results_NA <- data.frame(all_results_NA, stringsAsFactors=FALSE)
+
+annot_data_2 <- data.frame(annot_data, row.names=1)
+  
+for(j in 1:nrow(all_results_NA)){
+  if(j == 1){
+    curr_index <- as.numeric(which(all_results_NA[j,10]==row.names(annot_data_2)))
+    annot_to_append <- annot_data_2[curr_index, 2:4]
+    ## this assumes that the very first ChIP peak annotation in the file is NOT "NA" for nearby gene
+  } else{
+    curr_index <- as.numeric(which(all_results_NA[j,10]==row.names(annot_data_2)))
+    if(length(curr_index)==0){
+      annot_to_append <- rbind(annot_to_append, c(NA, NA, NA))
+      ## for when there is no nearby gene to a given ChIP peak
+    } else {
+      annot_to_append <- rbind(annot_to_append, annot_data_2[curr_index, 2:4])
+    }
+  }
+}
+  
+rownames(annot_to_append) <- c()
+  
+all_results_NA <- cbind(all_results_NA, annot_to_append)
+  
+colnames(all_results_NA) <- c("uniq_peak_label", "chr", "start_coord", "end_coord", "length_peak", "abs_summit_coord", "pileup_height", "neg_log10_pvalue", "fold_enrichment", "gene", "distance_from_peak", "gene_start", "gene_end", "gene_strand")
+  
+write.table(all_results_NA, "./all_results_annot_NAs.txt", sep="\t", row.names=F, quote=F)
+
+```
+
+## Part V: Combine all annotated ChIP peaks into one final file
+
+```{r}
+
+peaks_all <- peaks_all
+## from Part III, this file has all annotations including "NAs"
+peaks_not_NA <- peaks_all[which(!is.na(peaks_all$gene==TRUE)),]
+## keep only annotations WITH a nearby gene present
+peaks_NA_fixed <- data.frame(all_results_NA, stringsAsFactors=FALSE)
+## from Part IV, this file has "NA" peaks fixed with 1 annotation each
+
+peaks_final <- rbind(peaks_not_NA, peaks_NA_fixed)
+peaks_final <- data.frame(peaks_final, stringsAsFactors=FALSE)
+
+peaks_final <- peaks_final[order(as.numeric(peaks_final$start)),]
+peaks_final <- peaks_final[order(as.numeric(peaks_final$chr)),]
+peaks_final <- peaks_final[order(as.character(peaks_final$uniq_peak_label)),]
+
+write.table(peaks_final, "./all_results_final.txt", sep="\t", row.names=F, quote=F)
+
+```
+
+## Part VI: Visualize broad trends in the WCC ChIP-Seq dataset
+
+## Question I: what is the distribution of WCC ChIP-Seq peak widths in the dataset?
+
+```{r, fig.width=7, fig.height=5.5}
+
+peaks_final <- data.frame(peaks_final, stringsAsFactors=FALSE)
+
+peaks_sub <- peaks_final[!duplicated(peaks_final$uniq_peak_label),]
+## many peaks have multiple annotations, but this question deals with ChIP peaks only
+
+wid <- as.numeric(peaks_sub$length_peak)
+wid_sub <- wid[which(wid <= 1000)]
+perc <- length(wid_sub) / length(wid) * 100
+print(paste(round(perc,2), "% of ChIP-Seq peaks are less than or equal to 1,000 bp wide", sep=""))
+
+bins <- seq(200, 1000, by=50)
+hist(wid_sub, breaks = bins, xlab="ChIP peak width (bp)", main = "histogram of ChIP peak widths")
+
+```
+
+## Question II: do any of the extremely wide ChIP peaks obtain high scores?
+
+Intuition tells us that wide ChIP peaks are likely noise and should have low scores
+
+```{r, fig.width=7, fig.height=5.5}
+
+peaks_sub <- peaks_final[!duplicated(peaks_final$uniq_peak_label),]
+## many peaks have multiple annotations, but this question deals with ChIP peaks only
+
+wid <- as.numeric(peaks_sub$length_peak)
+pval <- as.numeric(peaks_sub$neg_log10_pvalue)
+
+wid_longest <- peaks_sub[which(wid >= 10000), ]
+pvals_longest <- wid_longest$neg_log10_pvalue
+pval_cutoff <- mean(pvals_longest)
+print(paste("Extremely wide peaks have an average neg log10 p-value of: ", round(pval_cutoff,2), sep=""))
+
+plot(x=wid, y=pval, type="p", pch=16, cex=0.8, xlab="peak width (bp)", ylab="negative log10 p-value")
+abline(a=25, b=0, col="red", lwd=1.5)
+text(x=8000, y=35, paste("cutoff at pval > 25", sep=""), cex=1, col="red")
+
+```
+
+## Question III: what is the distribution of distance from the ChIP peak to the TSS in the entire dataset? In only the higher confidence ChIP peaks?
+
+```{r, fig.width=7, fig.height=5.5}
+
+dist_all <- as.numeric(peaks_final$distance_from_peak)
+
+dist_1kb <- peaks_final[which(dist_all <= 1000), ]
+perc_1kb <- as.numeric(nrow(dist_1kb)) / as.numeric(length(dist_all)) * 100
+print(paste("Percent of peak annotations < 1 kb away in the entire dataset: ", round(perc_1kb,2), sep=""))
+
+dist_all_sub <- as.numeric(peaks_final$distance_from_peak[which(dist_all <= 3000)])
+bins <- seq(0, 3000, by=100)
+hist(dist_all_sub, breaks=bins, xlab="distance from edge ChIP peak to TSS (bp)", main = "histogram of TSS distances for only peaks within 3 kb")
+
+peaks_best <- peaks_final[as.numeric(peaks_final$neg_log10_pvalue) > 25,]
+## see question II for score cutoff
+dist_best <- as.numeric(peaks_best$distance_from_peak)
+dist_1kb <- peaks_best[which(dist_best <= 1000), ]
+perc_1kb <- as.numeric(nrow(dist_1kb)) / as.numeric(length(dist_best)) * 100
+print(paste("Percent of peak annotations < 1 kb away in the subset of highest scoring peaks: ", round(perc_1kb,2), sep=""))
+dist_best_sub <- as.numeric(peaks_best$distance_from_peak[which(dist_best <= 3000)])
+bins <- seq(0, 3000, by=100)
+hist(dist_best_sub, breaks=bins, xlab="distance from edge ChIP peak to TSS (bp)", main = "histogram of TSS distances \n for peaks scoring better than pval 25 (only within 3 kb)")
+
+```
+
+## Question IV: what is the distribution of distance from the ChIP peak to the TSS in the closest 1 gene annotated to each unique peak?
+
+```{r, fig.width=7, fig.height=5.5}
+
+peaks_sort_dist <- peaks_final[order(as.numeric(peaks_final$distance_from_peak)),]
+peaks_sort_dist <- data.frame(peaks_sort_dist, stringsAsFactors=FALSE)
+peaks_dist_sub <- peaks_sort_dist[!duplicated(peaks_sort_dist$uniq_peak_label),]
+peaks_dist_sub <- data.frame(peaks_dist_sub, stringsAsFactors=FALSE)
+## many peaks have multiple annotations, this sort and filter setup retains only the closest annotation to a given unique peak in the dataset
+
+dist_all <- as.numeric(peaks_dist_sub$distance_from_peak)
+dist_1kb <- peaks_dist_sub[which(dist_all <= 1000), ]
+perc_1kb <- as.numeric(nrow(dist_1kb)) / as.numeric(length(dist_all)) * 100
+print(paste("Percent of peak annotations < 1 kb away in the entire dataset (with closest annotation per peak): ", round(perc_1kb,2), sep=""))
+dist_all_sub <- as.numeric(peaks_dist_sub$distance_from_peak[which(dist_all <= 3000)])
+bins <- seq(0, 3000, by=100)
+hist(dist_all_sub, breaks=bins, xlab="distance from edge ChIP peak to TSS (bp)", main = "histogram of TSS distances for only peaks within 3 kb")
+
+peaks_best <- peaks_final[as.numeric(peaks_final$neg_log10_pvalue) > 25,]
+## see question II for score cutoff
+dist_best <- as.numeric(peaks_best$distance_from_peak)
+dist_1kb <- peaks_best[which(dist_best <= 1000), ]
+perc_1kb <- as.numeric(nrow(dist_1kb)) / as.numeric(length(dist_best)) * 100
+print(paste("Percent of peak annotations < 1 kb away in the subset of highest scoring peaks (with closest annotation per peak): ", round(perc_1kb,2), sep=""))
+dist_best_sub <- as.numeric(peaks_best$distance_from_peak[which(dist_best <= 3000)])
+bins <- seq(0, 3000, by=100)
+hist(dist_best_sub, breaks=bins, xlab="distance from edge ChIP peak to TSS (bp)", main = "histogram of TSS distances \n for peaks scoring better than pval 25 (only within 3 kb)")
+
+```
+
+## Question V: how many times does a TF bind multiple places in a single gene's promoter? what is the distribution of those distances?
+
+```{r, fig.width=7, fig.height=5.5}
+
+peaks_labs <- as.character(peaks_final$uniq_peak_label)
+exps_labs <- as.character(strsplit(peaks_labs, "_peak_[0-9]+$"))
+exps_labs_uniq <- as.character(unique(exps_labs))
+
+count_final <- matrix(nrow=length(exps_labs_uniq), ncol=2)
+## first, count the number of duplicate gene targets per ChIP experiment
+for(i in 1:length(exps_labs_uniq)){
+  cur_exp <- as.character(exps_labs_uniq[i])
+  count_final[i,1] <- cur_exp
+  cur_idxs <- as.numeric(which(cur_exp == exps_labs))
+  cur_annotations <- as.character(peaks_final$gene[cur_idxs])
+  cur_annot_uniq <- as.character(unique(cur_annotations))
+  count_dupl <- 0
+  for(k in 1:length(cur_annot_uniq)){
+    cur_tar_gene <- as.character(cur_annot_uniq[k])
+    cur_tar_idxs <- as.numeric(which(cur_tar_gene == cur_annotations))
+    if(length(cur_tar_idxs)==1){
+      ## only 1 match, i.e. not a duplicate
+      ## allocate 1 row of the final output to this, will want to quantify
+      count_dupl <- count_dupl + 1
+    } else if(length(cur_tar_idxs)>=2){
+      ## more than 1 match, i.e. yes a duplicate
+      ## allocate 1 row of the final output to this, will want to quantify
+      count_dupl <- count_dupl + 1
+    } else{
+      print("bug!")
+    }
+  }
+  count_final[i,2] <- count_dupl
+}
+
+total_dupl <- sum(as.numeric(count_final[,2]))
+output_all <- matrix(nrow=total_dupl, ncol=13)
+index_exp <- 1
+index_out <- 1
+for(i in 1:nrow(count_final)){
+  cur_exp <- as.character(count_final[index_exp,1])
+  cur_idxs <- as.numeric(which(cur_exp == exps_labs))
+  cur_annotations <- as.character(peaks_final$gene[cur_idxs])
+  cur_annot_uniq <- as.character(unique(cur_annotations))
+  for(k in 1:length(cur_annot_uniq)){
+    cur_tar_gene <- as.character(cur_annot_uniq[k])
+    cur_tar_idxs <- as.numeric(which(cur_tar_gene == cur_annotations))
+    if(length(cur_tar_idxs)==1){
+      ## only 1 match, i.e. not a duplicate
+      output_all[index_out, 1] <- cur_exp
+      output_all[index_out, 2] <- cur_tar_gene
+      output_all[index_out, 3] <- 1
+      output_all[index_out, 4:13] <- NA
+      index_out <- index_out + 1
+    } else if(length(cur_tar_idxs)>=2){
+      ## more than 1 match, i.e. yes a duplicate
+      num_binding <- as.numeric(length(cur_tar_idxs))
+      cur_tar_dists <- as.numeric(peaks_final$distance_from_peak[cur_tar_idxs])
+      cur_tar_dists_order <- cur_tar_dists[order(cur_tar_dists)]
+      if(num_binding <= 10){
+        output_all[index_out, 1] <- cur_exp
+        output_all[index_out, 2] <- cur_tar_gene
+        output_all[index_out, 3] <- num_binding
+        output_all[index_out, 4:(3+num_binding)] <- cur_tar_dists_order
+        index_out <- index_out + 1
+      } else{
+        ## keep only the 10 closest peaks in the output here
+        output_all[index_out, 1] <- cur_exp
+        output_all[index_out, 2] <- cur_tar_gene
+        output_all[index_out, 3] <- num_binding
+        output_all[index_out, 4:13] <- cur_tar_dists_order[1:10]
+        index_out <- index_out + 1
+      }
+    } else{
+      print("bug!")
+    }
+  }
+  index_exp <- index_exp + 1
+}
+
+instances_annot <- as.numeric(output_all[,3])
+inst_annot_less_5 <- instances_annot[which(instances_annot <= 5)]
+perc_1 <- as.numeric(length(which(instances_annot==1))) / as.numeric(nrow(output_all)) * 100
+perc_2 <- as.numeric(length(which(instances_annot==2))) / as.numeric(nrow(output_all)) * 100
+print(paste("Percent of ChIP experiments annotated to a target gene only 1x: ", round(perc_1,2), sep=""))
+print(paste("Percent of ChIP experiments annotated to a target gene 2x: ", round(perc_2,2), sep=""))
+bins <- seq(0, 5, by=1)
+hist(inst_annot_less_5, breaks=bins, xlab="counts of a targe gene promoter bound in ChIP experiment annotations", main = "histogram of ChIP binding to one target gene multiple times")
+
+all_distances <- as.numeric(output_all[,4:13])
+all_dist_noNA <- all_distances[which(is.na(all_distances)==FALSE)]
+all_dist_order <- all_dist_noNA[order(all_dist_noNA)]
+all_dist_3kb <- all_dist_order[which(all_dist_order<=3000)]
+perc_3kb <- as.numeric(length(all_dist_3kb)) / as.numeric(length(all_dist_order)) * 100
+print(paste("Percent of multi-annotations < 3 kb away: ", round(perc_3kb,2), sep=""))
+bins <- seq(0, 3000, by=100)
+hist(all_dist_3kb, breaks=bins, xlab="distance from edge ChIP peak to TSS (bp) of multi-annotated gene", main = "histogram of ChIP binding to a single target gene multiple times")
+
+```
